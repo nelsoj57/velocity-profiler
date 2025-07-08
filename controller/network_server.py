@@ -1,3 +1,24 @@
+"""
+Notes on possible messages ordering:
+| Message        | Sender → Receiver     | When                                    |
+| -------------- | --------------------- | --------------------------------------- |
+| `READY`        | Analyzer → Controller | After processing last measurement       |
+| `ARM`          | Controller → Analyzer | When both are ready                     |
+| `ACK` (`ARM`)  | Analyzer → Controller | After buffer setup complete             |
+| `TRIG`         | Controller → Analyzer | 100–150 ms before desired start         |
+| `ACK` (`TRIG`) | Analyzer → Controller | After setting local `t0`                |
+| `FIN`          | Analyzer → Controller | After local acquisition and calculation |
+| `RAW` (opt)    | Analyzer → Controller | After `FIN`, if raw data needed         |
+| `ACK` (`FIN`)  | Controller → Analyzer | Confirms receipt of stats               |
+| `STEP`         | Controller → Analyzer | Voltage command and metadata            |
+| `ACK` (`STEP`) | Analyzer → Controller | Confirms it received new setpoint       |
+
+Additional notes:
+- The way Photodiode data is synced with Wavemeter data would be sending a `TRIG` command:
+- Basically they would have to sync up their clocks on the LAN then say we're both going to start recording at this set future time.
+
+"""
+
 # TODO: possibly move this to analyzer module. Probably not. I actually think its in the right place
 import zmq
 
