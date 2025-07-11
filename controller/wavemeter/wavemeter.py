@@ -7,6 +7,8 @@ import numpy as np
 import wlmConst
 import wlmData
 
+import weakref  # Used for callback function, if needed
+
 # Set the data acquisition time (sec) here:
 DATA_ACQUISITION_TIME = (
     5  # TODO: possibly move this to a config file. ALSO remove if unused
@@ -15,14 +17,7 @@ DATA_ACQUISITION_TIME = (
 # Set the callback thread priority here:
 CALLBACK_THREAD_PRIORITY = 2  # TODO: look into what value I should use here. ALSO move this to a config file if needed.
 
-# Load wlmData library. If needed, adjust the path by passing it to LoadDLL()!
-try:
-    dll = wlmData.LoadDLL()
-    # dll = wlmData.LoadDLL('/path/to/your/libwlmData.so')
-except OSError as err:
-    sys.exit(f"{err}\nPlease check if the wlmData DLL is installed correctly!")
 
-DLL_PATH = "wlmData.dll"  # TODO: this may not be needed if LoadDLL() works correctly
 # TODO: I have 2 options here:
 """
 1. Use a callback mechanism to get frequency updates (this may only be able to get the wavelength, not frequency). (the manual is not clear on this)
@@ -137,12 +132,13 @@ class WavemeterWS7:
         self.reset_buffer()
 
         # Install callback function
-        dll.Instantiate(
+        self.api.Instantiate(
             wlmConst.cInstNotification,
             wlmConst.cNotifyInstallCallback,
             self.frequency_callback_handler,
             CALLBACK_THREAD_PRIORITY,
         )
+        # TODO: Instantiate may also be used to change how functions like GetFrequency() return repeat values
 
         # Give a little time for data acquisition #TODO: I'm not sure if this is the right way to do this.
         """Because I'm not sure if this will block until the callback is called, or only call the callback once. 
@@ -150,11 +146,14 @@ class WavemeterWS7:
         time.sleep(DATA_ACQUISITION_TIME)
 
         # Remove callback function
-        dll.Instantiate(
+        self.api.Instantiate(
             wlmConst.cInstNotification, wlmConst.cNotifyRemoveCallback, None, 0
         )
 
     # The callback-based frequency update function
+    # TODO: TODO: TODO: update this to use a weakref to the instance, so the callback function signature matches the expected one.
+    # TODO: This function might need to be defined inside the _init_ method so it doesn't have an implicit self parameter?
+    # TODO: Or maybe just have it as a static method, although I'm unsure if that allow referneces to an individual instance to be meaningful?
     @wlmData.CALLBACK_TYPE
     def frequency_callback_handler(self, mode, intval, dblval):
         # TODO: change mode to be a more descriptive name, like event_mode or event_type

@@ -5,7 +5,7 @@ Notes on possible messages ordering:
 | `READY`        | Analyzer → Controller | After processing last measurement       |
 | `ARM`          | Controller → Analyzer | When both are ready                     |
 | `ACK` (`ARM`)  | Analyzer → Controller | After buffer setup complete             |
-| `TRIG`         | Controller → Analyzer | 100–150 ms before desired start         |
+| `TRIG`         | Controller → Analyzer | 100-150 ms before desired start         |
 | `ACK` (`TRIG`) | Analyzer → Controller | After setting local `t0`                |
 | `FIN`          | Analyzer → Controller | After local acquisition and calculation |
 | `RAW` (opt)    | Analyzer → Controller | After `FIN`, if raw data needed         |
@@ -32,6 +32,7 @@ class ControllerServer:
         is_running (bool): Control flag for the main loop
     """
 
+    # TODO: I may need to pick a higher port number or have it dynamically assigned by the OS to avoid conflicts with other services. Maybe 50505?
     def __init__(self, bind_ip: str = "0.0.0.0", port: int = 5555):
         """Sets up the server socket and prepares to listen."""
 
