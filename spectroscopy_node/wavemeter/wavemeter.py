@@ -99,3 +99,218 @@ This class CAN use the Call the Wavemeter class methods directly, but it should 
 
 
 """
+"""
+TODO: TODO: TODO: TODO: TODO: This is how it will actually work:
+Classes:
+1. Wavemeter: Represents the wavemeter device and its DLL methods.
+2. SamplePoint: A dataclass that represents a single sample point with attributes like timestamp, value, and metadata (if needed)
+3. AcquisitionStrategy: a class that overloads the __call__ method to implement different sampling strategies:
+    - The __call__ method will take a Wavemeter object and return a single SamplePoint object? Or maybe a list of SamplePoint objects or maybe just a float that something else will use to create a SamplePoint object.
+    - the aquisition strategy must have this signature: Callable[[Wavemeter], float]
+4. BaseScheduler: A class that manages the scheduling of sampling tasks. It can take an AcquisitionStrategy and a Wavemeter object and run the sampling strategy at a specified interval or for a specified duration.
+    - An Abstract Base Class that defines the interface for scheduling sampling tasks.
+    - Example derived classes:
+        - IntervalScheduler: Runs the sampling strategy at a fixed interval.
+        - DurationScheduler: Runs the sampling strategy for a specified duration.
+        - 
+5. SampleSession: The session owns the life-cycle.If you need many sessions in parallel, wrap them in a higher-level WavemeterManager; otherwise SampleSession itself can be “the controller”.
+"""
+import sys, weakref
+from abc import ABC
+
+# wlmData.dll related imports
+import wlmConst
+import wlmData
+
+
+# Set the callback thread priority here:
+CALLBACK_THREAD_PRIORITY = 2  # TODO: look into what value I should use here. ALSO move this to a config file if needed.
+
+
+# TODO: remove if theres a cleaner way to handle exceptions (these come from wavemeter_ws7.py)
+class WavemeterWS7Exception(Exception):
+    pass
+
+
+class WavemeterWS7BadSignalException(WavemeterWS7Exception):
+    pass
+
+
+class WavemeterWS7NoSignalException(WavemeterWS7Exception):
+    pass
+
+
+class WavemeterWS7LowSignalException(WavemeterWS7Exception):
+    pass
+
+
+class WavemeterWS7HighSignalException(WavemeterWS7Exception):
+    pass
+
+
+class WavemeterWS7:
+    """
+    Wraps access to the wavemeter DLL or API for polling frequency data.
+
+    Attributes:
+        handle (object): Internal DLL or API handle (optional depending on library)
+    """
+
+    _CALLBACK_TYPE = (
+        wlmData.CALLBACK_TYPE
+    )  # Define the callback type for the wavemeter API
+
+    def __init__(self):
+        """
+        Initializes the WavemeterWS7 object.
+        This may include loading the DLL or API and setting up the handle.
+        """
+        try:
+            self._api = wlmData.LoadDLL()
+            # self._api = wlmData.LoadDLL('/path/to/your/libwlmData.so')
+        except OSError as err:
+            sys.exit(f"{err}\nPlease check if the wlmData DLL is installed correctly!")
+
+        # Check the number of WLM server instances
+        if self._api.GetWLMCount(0) == 0:
+            sys.exit("There is no running WLM server instance.")
+
+        # self_ref = weakref.ref(
+        #     self
+        # )  # Keep a weak reference to self to avoid circular references
+
+    def get_frequency(self) -> float:
+        """
+        Returns the current laser frequency in Hz (or MHz if preferred).
+        """
+        frequency = self._api.GetFrequency(0.0)
+        match frequency:  # TODO: replace with a cleaner/briefer way to handle errors
+            case wlmConst.ErrWlmMissing:
+                raise WavemeterWS7Exception("WLM inactive")
+            case wlmConst.ErrNoSignal:
+                raise WavemeterWS7NoSignalException
+            case wlmConst.ErrBadSignal:
+                raise WavemeterWS7BadSignalException
+            case wlmConst.ErrLowSignal:
+                raise WavemeterWS7LowSignalException
+            case wlmConst.ErrBigSignal:
+                raise WavemeterWS7HighSignalException
+
+        return frequency
+
+    @staticmethod
+    @wlmData.CALLBACK_TYPE
+    def frequency_callback_handler(event_type, time_stamp, frequency):
+        # TODO: change mode to be a more descriptive name, like event_mode or event_type
+        """
+        Callback function to handle frequency updates from the wavemeter.
+        This function is called by the wavemeter API when a frequency update event occurs.
+
+        Args:
+            event_type: The type of the event (e.g., cmiFrequency1, cmiFrequency2).
+            time_stamp: An integer value associated with the event.
+            frequency: The frequency value in Hz.
+        """
+        match event_type:
+            case wlmConst.cmiFrequency1:
+                pass
+            # TODO: Send the data somewhere
+            # TODO: you could have a buffer/array/queue that belongs to the WavemeterWS7 object that holds the frequency data and then have a method to retrieve that data
+
+            case wlmConst.cmiFrequency2:
+                pass
+
+            case _:
+                return  # Ignore other modes TODO: see if return is the right/fastest way to ignore
+
+    # def start_streaming(self):
+    #     """
+    #     Starts streaming frequency data from the wavemeter.
+    #     """
+    #     # Create data structure to hold frequency data
+
+    #     # Install callback function
+    #     self._api.Instantiate(
+    #         wlmConst.cInstNotification,
+    #         wlmConst.cNotifyInstallCallback,
+    #         self.frequency_callback_handler,
+    #         CALLBACK_THREAD_PRIORITY,
+    #     )
+
+    # def stop_streaming(self):
+    #     """
+    #     Stops streaming frequency data from the wavemeter.
+    #     """
+    #     # Uninstall callback function
+    #     self._api.Instantiate(
+    #         wlmConst.cInstNotification, wlmConst.cNotifyRemoveCallback, None, 0
+    #     )
+
+    def _register_callback(self, cb: _CALLBACK_TYPE) -> None:
+        """
+        Registers the frequency callback function with the wavemeter API.
+        This function is called to set up the callback for frequency updates.
+        """
+        self._api.Instantiate(
+            wlmConst.cInstNotification,
+            wlmConst.cNotifyInstallCallback,
+            cb,
+            CALLBACK_THREAD_PRIORITY,
+        )
+
+    def _unregister_callback(self) -> None:
+        """
+        Unregisters the frequency callback function from the wavemeter API.
+        This function is called to remove the callback for frequency updates.
+        """
+        self._api.Instantiate(
+            wlmConst.cInstNotification, wlmConst.cNotifyRemoveCallback, None, 0
+        )
+
+
+"""
+Notes/ideas for streaming data:
+    Possible approaches:
+    1. Unistall the callback function every time a frequency event occurs.
+        - This would mean that the callback function is only called once per frequency event and then uninstalled.
+        - Then the callback function could just update a value and the some method could be called to retrieve that value
+        - Then this method follows the AquisitionStrategy pattern required
+    2. See if we can relax the AquisitionStrategy pattern so we can return a list of floats instead of a single float.
+        - Then the get_frequency method could return a list containing just a single float value.
+        - Then the callback function could just append the frequency value to a list and then when streaming is stopped, the list can be returned.
+    3. Add an attribute to the WavemeterWS7 class that holds a list of frequency values and then the callback function can just append the frequency value to that list. (original idea)
+    4. Add an attribute to the WavemeterWS7 class that holds a just the latest frequency value and use a yielding/generator function somehow to return the latest frequency value when requested.
+        - This may require another thread or something listening for frequency events or updates to the latest frequency value. Which is highly redundant since the callback function is already doing that.
+        - Or maybe the callback function updates the latest frequency value and then calls a method that yields the latest frequency value?
+
+    6? Maybe the scheduler class handles Instantiate and uninstalling the callback function?
+
+    
+Idea Scheduler Outline:
+    The callback function is defined in the Scheduler class?
+    start():
+        - Instantiates the callback function
+        - When the callback function is called, it updates/appends a value in the scheduler class by means of weak reference or a global variable
+        - So no AcquisitionStrategy is Used,
+        TODO: So make the AcquisitionStrategy an optional attribute of the Scheduler and Session classes?
+
+    stop():
+        - Uninstantiates the callback function
+
+    TODO: reference ChatGPT conversation for more ideas on how to implement this.
+"""
+
+
+class BaseScheduler(ABC):
+    # TODO: Make the AcquisitionStrategy an optional attribute of the Scheduler and Session classes
+    pass
+
+
+class EventDrivenScheduler(BaseScheduler):
+    """
+    An EventDrivenScheduler that uses the WavemeterWS7 class to handle frequency events.
+    This scheduler will use the callback function to update the frequency data.
+    """
+
+    def __init__(self, wavemeter: WavemeterWS7):
+        self.wavemeter = wavemeter
