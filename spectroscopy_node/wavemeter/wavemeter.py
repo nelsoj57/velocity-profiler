@@ -116,7 +116,10 @@ Classes:
 5. SampleSession: The session owns the life-cycle.If you need many sessions in parallel, wrap them in a higher-level WavemeterManager; otherwise SampleSession itself can be “the controller”.
 """
 import sys, weakref
-from abc import ABC
+import queue, threading, time
+from typing import Optional, Callable, Protocol, TYPE_CHECKING
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 
 # wlmData.dll related imports
 import wlmConst
@@ -178,6 +181,7 @@ class WavemeterWS7:
         # self_ref = weakref.ref(
         #     self
         # )  # Keep a weak reference to self to avoid circular references
+        self._cb_cfunc = None  # Callback function for frequency updates
 
     def get_frequency(self) -> float:
         """
@@ -199,7 +203,8 @@ class WavemeterWS7:
         return frequency
 
     @staticmethod
-    @wlmData.CALLBACK_TYPE
+    # @wlmData.CALLBACK_TYPE
+    @_CALLBACK_TYPE  # TODO: see if this works
     def frequency_callback_handler(event_type, time_stamp, frequency):
         # TODO: change mode to be a more descriptive name, like event_mode or event_type
         """
@@ -247,10 +252,12 @@ class WavemeterWS7:
     #     )
 
     def _register_callback(self, cb: _CALLBACK_TYPE) -> None:
+        # TODO: add CALLBACK_THREAD_PRIORITY as an argument to this method
         """
         Registers the frequency callback function with the wavemeter API.
         This function is called to set up the callback for frequency updates.
         """
+
         self._api.Instantiate(
             wlmConst.cInstNotification,
             wlmConst.cNotifyInstallCallback,
@@ -266,6 +273,52 @@ class WavemeterWS7:
         self._api.Instantiate(
             wlmConst.cInstNotification, wlmConst.cNotifyRemoveCallback, None, 0
         )
+
+    # Public Helper Methods
+    # def register_frequency_callback(self, cb: _CALLBACK_TYPE) -> None:
+    def register_frequency_callback(
+        self, cb: Callable[[int, int, float], None]
+    ) -> None:
+        """
+        Public method to register a frequency callback function.
+        This method is used to set up the callback for frequency updates.
+
+        Args:
+            cb (_CALLBACK_TYPE): The callback function to register.
+
+        DOCUMENTATION:
+        Order of Operations:
+        1. An event occurs in the wavemeter (e.g., a frequency update).
+        2. The wavemeter API calls the _wrapper function with the event data.
+            - The _wrapper function is NOT a bound method (it does not have a hidden self argument) so it has the proper C-style callback signature.
+        3. The _wrapper function calls the user-defined callback function (cb) (which MAY be a bound method with a hidden self argument) with the event data.
+        4. The user-defined callback function processes the event data as needed.
+        5. Repeat
+        """
+
+        def _wrapper(mode, intval, dblval):
+            """
+            A wrapper function to call the user-defined callback with the frequency value.
+            This is necessary to convert the wavemeter callback signature to a more user-friendly one.
+
+            # The wrapper is necessary because cb may be a bound method (a method bound to an object?) with a hidden self argument, so we need to convert it to a wavemeter callback signature
+
+            """
+            cb(mode, intval, dblval)
+            # convert the cb signature to match the wavemeter callback signature
+
+        self._cb_cfunc = self._CALLBACK_TYPE(_wrapper)
+        # Register the callback function with the wavemeter API
+        self._register_callback(self._cb_cfunc)
+
+    def unregister_frequency_callback(self) -> None:
+        """
+        Public method to unregister the frequency callback function.
+        This method is used to remove the callback for frequency updates.
+        """
+        if self._cb_cfunc is not None:
+            self._unregister_callback()
+            self._cb_cfunc = None
 
 
 """
@@ -301,16 +354,123 @@ Idea Scheduler Outline:
 """
 
 
+@dataclass(
+    frozen=True, slots=True
+)  # frozen=True makes the dataclass immutable, slots=True saves memory by using __slots__ (a continous array) instead of a dict for attributes
+class SamplePoint:
+    """
+    A class representing a sample point from the wavemeter.
+    """
+
+    t: int  # Timestamp of the sample point in milliseconds
+    value: float  # Frequency value of the sample point
+    source: str = field(
+        repr=False
+    )  # this keeps the source from being printed when the SamplePoint is printed, but it can still be accessed as an attribute
+
+
+# ------TypeChecking Classes------
+class AcquisitionStrategy(Protocol):
+    """
+    A protocol for acquisition strategies that can be used to acquire data from the wavemeter.
+    The __call__ method should return a SamplePoint object or a float value.
+    """
+
+    # Acquire data from the wavemeter and return a float value or a SamplePoint object.
+    # TODO: see if I want to use a SamplePoint object or just a float value.
+    def __call__(self, device: WavemeterWS7) -> float | SamplePoint: ...
+
+
 class BaseScheduler(ABC):
     # TODO: Make the AcquisitionStrategy an optional attribute of the Scheduler and Session classes
-    pass
+
+    def __init__(
+        self,
+        wavemeter: WavemeterWS7,
+        acquisition_strategy: Optional[AcquisitionStrategy],
+    ):
+        """
+        Initializes the BaseScheduler with a WavemeterWS7 object.
+
+        Args:
+            wavemeter (WavemeterWS7): The wavemeter object to use for frequency events.
+        """
+        self._acq_strat = acquisition_strategy  # TODO: make this an optional attribute of the Scheduler and Session classes
+        self._device = wavemeter
+        self._queue: queue.Queue[SamplePoint] = (
+            queue.Queue()
+        )  # Use a queue to hold frequency data TODO: or name _queue or _buffer or _data_buffer or _frequency_data or something similar
+
+        # public API
+        @property
+        def data(self) -> queue.Queue[SamplePoint]:
+            """
+            Returns the queue holding frequency data.
+            A getter for the _queue attribute.
+            """
+            return self._queue
+
+    @abstractmethod
+    def start(self) -> None: ...
+    @abstractmethod
+    def stop(self) -> None: ...
 
 
-class EventDrivenScheduler(BaseScheduler):
+# Concrete Schedulers
+#TODO: I'm pretty sure that EVERY scheduler that will wait to be stopped by the Session Object will need to use threading so that the main thread can continue to run and not block on the scheduler.
+#TL;DR: If the scheduler is going to wait for a stop signal, it will need to run in a separate thread
+# If the sheduler is going to stop on its own after a certain condition is met, then it can propably just run in the main thread. Unless it needs the OPTION to be able to be stopped externally.
+class CbEventDrivenScheduler(BaseScheduler):  # TODO: come up with a better name
     """
     An EventDrivenScheduler that uses the WavemeterWS7 class to handle frequency events.
     This scheduler will use the callback function to update the frequency data.
     """
+    
 
-    def __init__(self, wavemeter: WavemeterWS7):
-        self.wavemeter = wavemeter
+    def __init__(
+        self,
+        wavemeter: WavemeterWS7,
+        
+
+
+    ):
+        
+""" TODO: This facade class may be unecessary?
+IT may be nice for combining all of the scheduler functionality into one class and just having kwargs for the different schedulers, but it may be better to just have a separate class for each scheduler type.
+TODO: Session Class should hold all helpful methods for starting and stopping the scheduler, as well as holding the data and processing it.
+- It could hold data about multiple runs and aggregate the data from all runs.
+- It could hold a list of Schedulers to execute in sequence OR (better idea:) Just hold a single Scheduler, take the data out from it, call clear on it, and start it again when applicable?
+- It could seperate each runs data and/or hold metadata on each run or the entire session.
+# ---------------------------------------------------------------------------
+# 3.  SampleSession façade
+# ---------------------------------------------------------------------------
+
+class SampleSession:
+    def __init__(self,
+                 device,
+                 scheduler: BaseScheduler,
+                 **kwargs):
+        self.device    = device
+        self.scheduler = scheduler(..., **kwargs)
+        self._data: list[SamplePoint] = []
+
+    # life-cycle ------------------------------------------------------------
+    def start(self): self.scheduler.start()
+    def stop(self):
+        self.scheduler.stop()
+        dq = self.scheduler.data
+        while not dq.empty():
+            self._data.append(dq.get())
+
+    # convenience -----------------------------------------------------------
+    @property
+    def data(self):            # list[SamplePoint]
+        return self._data
+
+    def as_numpy(self):
+        import numpy as np
+        return np.array([p.value for p in self._data])
+
+# ---------------------------------------------------------------------------
+
+"""
