@@ -401,19 +401,74 @@ class BaseScheduler(ABC):
             queue.Queue()
         )  # Use a queue to hold frequency data TODO: or name _queue or _buffer or _data_buffer or _frequency_data or something similar
 
-        # public API
-        @property
-        def data(self) -> queue.Queue[SamplePoint]:
-            """
-            Returns the queue holding frequency data.
-            A getter for the _queue attribute.
-            """
-            return self._queue
+        self._stop_event = threading.Event()
+        self._running = False
+
+    # public API
+    @property
+    def data(self) -> queue.Queue[SamplePoint]:
+        """
+        Returns the queue holding frequency data.
+        A getter for the _queue attribute.
+        """
+        return self._queue
+    @property
+    def is_running(self) -> bool:
+        """
+        Returns whether the scheduler is currently running.
+        A getter for the _running attribute.
+        """
+        return self._running
+
+    # @abstractmethod
+    # def start(self) -> None: ...
+    # @abstractmethod
+    # def stop(self) -> None: ...
 
     @abstractmethod
-    def start(self) -> None: ...
-    @abstractmethod
-    def stop(self) -> None: ...
+    def _run_loop(self):
+        """Implement this loop in each scheduler subclass.
+        It should check self._stop_event periodically and exit cleanly."""
+        ...
+
+    def start(self):
+        """Default: run in current thread (blocking). Overridden in mixin if threaded=True."""
+        self._running = True
+        self._stop_event.clear()
+        self._run_loop()
+
+    def stop(self):
+        """Tell the loop to stop. The loop should check this event and exit."""
+        self._stop_event.set()
+        self._running = False
+
+
+class ThreadedMixin: 
+    """
+    A mixin class that adds threading support to a scheduler.
+    If threaded=True, the scheduler will run in a separate thread.
+    If threaded=False, the scheduler will run in the current thread (blocking).
+
+    Usage:
+        class MyScheduler(ThreadedMixin, BaseScheduler):
+        The mixin MUST be the first class in the inheritance list.
+
+    """
+    def __init__(self, threaded=False):
+        self._threaded = threaded
+        self._thread = None
+
+    def start(self):
+        if self._threaded:
+            self._thread = threading.Thread(target=super().start, daemon=True)
+            self._thread.start()
+        else:
+            super().start()
+
+    def stop(self):
+        super().stop()
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
 
 
 # Concrete Schedulers
