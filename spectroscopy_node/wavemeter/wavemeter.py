@@ -378,7 +378,7 @@ class AcquisitionStrategy(Protocol):
 
     # Acquire data from the wavemeter and return a float value or a SamplePoint object.
     # TODO: see if I want to use a SamplePoint object or just a float value.
-    def __call__(self, device: WavemeterWS7) -> float | SamplePoint: ...
+    def __call__(self, device: WavemeterWS7) -> float: ...
 
 
 class BaseScheduler(ABC):
@@ -388,6 +388,7 @@ class BaseScheduler(ABC):
         self,
         wavemeter: WavemeterWS7,
         acquisition_strategy: Optional[AcquisitionStrategy],
+        threaded: bool = False,
     ):
         """
         Initializes the BaseScheduler with a WavemeterWS7 object.
@@ -403,6 +404,8 @@ class BaseScheduler(ABC):
 
         self._stop_event = threading.Event()
         self._running = False
+        self._threaded = threaded
+        self._thread = None
 
     # public API
     @property
@@ -412,6 +415,7 @@ class BaseScheduler(ABC):
         A getter for the _queue attribute.
         """
         return self._queue
+
     @property
     def is_running(self) -> bool:
         """
@@ -432,64 +436,138 @@ class BaseScheduler(ABC):
         ...
 
     def start(self):
-        """Default: run in current thread (blocking). Overridden in mixin if threaded=True."""
-        self._running = True
+        """Start the scheduler. Optionally runs in a background thread."""
         self._stop_event.clear()
-        self._run_loop()
+        self._running = True
+
+        if self._threaded:
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+        else:
+            self._run_loop()
 
     def stop(self):
         """Tell the loop to stop. The loop should check this event and exit."""
         self._stop_event.set()
         self._running = False
-
-
-class ThreadedMixin: 
-    """
-    A mixin class that adds threading support to a scheduler.
-    If threaded=True, the scheduler will run in a separate thread.
-    If threaded=False, the scheduler will run in the current thread (blocking).
-
-    Usage:
-        class MyScheduler(ThreadedMixin, BaseScheduler):
-        The mixin MUST be the first class in the inheritance list.
-
-    """
-    def __init__(self, threaded=False):
-        self._threaded = threaded
-        self._thread = None
-
-    def start(self):
-        if self._threaded:
-            self._thread = threading.Thread(target=super().start, daemon=True)
-            self._thread.start()
-        else:
-            super().start()
-
-    def stop(self):
-        super().stop()
-        if self._thread and self._thread.is_alive():
+        # TODO: If running in a thread, join? TODO: check if below is correct
+        if self._threaded and self._thread is not None:
             self._thread.join()
 
 
 # Concrete Schedulers
-#TODO: I'm pretty sure that EVERY scheduler that will wait to be stopped by the Session Object will need to use threading so that the main thread can continue to run and not block on the scheduler.
-#TL;DR: If the scheduler is going to wait for a stop signal, it will need to run in a separate thread
+# TODO: I'm pretty sure that EVERY scheduler that will wait to be stopped by the Session Object will need to use threading so that the main thread can continue to run and not block on the scheduler.
+# TL;DR: If the scheduler is going to wait for a stop signal, it will need to run in a separate thread
 # If the sheduler is going to stop on its own after a certain condition is met, then it can propably just run in the main thread. Unless it needs the OPTION to be able to be stopped externally.
 class CbEventDrivenScheduler(BaseScheduler):  # TODO: come up with a better name
     """
     An EventDrivenScheduler that uses the WavemeterWS7 class to handle frequency events.
     This scheduler will use the callback function to update the frequency data.
     """
-    
+
+    """
+    Initializes the CbEventDrivenScheduler with a WavemeterWS7 object and an optional acquisition strategy.
+
+    Args:
+        wavemeter (WavemeterWS7): The wavemeter object to use for frequency events.
+        acquisition_strategy (Optional[AcquisitionStrategy]): An optional acquisition strategy to use for sampling.
+        threaded (bool): Whether to run the scheduler in a separate thread. Defaults to True.
+    """
 
     def __init__(
         self,
         wavemeter: WavemeterWS7,
-        
-
-
+        # acquisition_strategy: Optional[AcquisitionStrategy] = None,
+        threaded: bool = True,  # TODO possibly make default False?
     ):
-        
+        super().__init__(wavemeter, None, threaded)
+        # self._device.register_frequency_callback(self._frequency_callback_handler)
+
+    def _frequency_callback_handler(self, mode: int, intval: int, dblval: float):
+        """
+        Callback function to handle frequency updates from the wavemeter.
+        This function is called by the wavemeter API when a frequency update event occurs.
+
+        Args:
+            mode (int): The type of the event (e.g., cmiFrequency1, cmiFrequency2).
+            intval (int): An integer value associated with the event.
+            dblval (float): The frequency value in Hz.
+        """
+        # Create a SamplePoint object and put it in the queue
+        if mode in (wlmConst.cmiFrequency1, wlmConst.cmiFrequency2):
+            sample_point = SamplePoint(
+                t=intval, value=dblval, source="CbEventDrivenScheduler"
+            )
+            self._queue.put(sample_point)
+            # TODO: see if I need to do a no wait put or whatever its called
+
+    def _run_loop(self):
+        """
+        The main loop of the CbEventDrivenScheduler.
+        This loop will run until the stop event is set.
+        It will register the callback function and wait for frequency events.
+        """
+        # Register the callback function with the wavemeter API
+        self._device.register_frequency_callback(self._frequency_callback_handler)
+
+        # while not self._stop_event.is_set():
+        #     time.sleep(0.1) #TODO: find a better way to stop or wait for an interrupt or something instead of doing a spin loop
+        #     #TODO: I might not even need to loop at all here since the callback function will be called by the wavemeter API when a frequency event occurs.?
+
+    def stop(self):
+        """
+        Stop the CbEventDrivenScheduler.
+        This will unregister the callback function and stop the main loop.
+        """
+        self._stop_event.set()  # TODO: unnecessary if not looping.
+        self._device._unregister_callback()
+        self._running = False  # TODO: check if this is necessary, since the _run_loop method will exit when the stop event is set
+
+
+class IntervalScheduler(BaseScheduler):
+    """
+    An IntervalScheduler that uses the WavemeterWS7 class to poll frequency data at a fixed interval.
+    This scheduler will use the get_frequency method to update the frequency data.
+    """
+
+    def __init__(
+        self,
+        wavemeter: WavemeterWS7,
+        acquisition_strategy: AcquisitionStrategy,  # TODO: possibly put lamda expresesion here to get_frequency method from wavemeter as default
+        interval: float = 1.0,  # Default to 1 second interval
+        threaded: bool = True,
+    ):
+        super().__init__(wavemeter, acquisition_strategy, threaded)
+        self._interval = interval
+
+    def _run_loop(self):
+        """
+        The main loop of the IntervalScheduler.
+        This loop will run until the stop event is set.
+        It will poll the wavemeter for frequency data at the specified interval.
+        """
+        while not self._stop_event.is_set():
+            try:
+                # frequency = self._device.get_frequency()
+                # Use acquisition strategy if provided, otherwise use the default get_frequency method
+                if self._acq_strat:
+                    frequency = self._acq_strat(self._device)
+                else:
+                    frequency = self._device.get_frequency()
+                # frequency = self._acq_strat(self._device)
+                # ^TODO: unsure why its an error because the acquisition_strategy is required
+
+                sample_point = SamplePoint(
+                    t=int(time.time() * 1000),
+                    value=frequency,
+                    source="IntervalScheduler",
+                )
+                self._queue.put(sample_point)
+            except WavemeterWS7Exception as e:
+                print(f"Error getting frequency: {e}")
+            time.sleep(self._interval)  # Wait for the specified interval
+
+
 """ TODO: This facade class may be unecessary?
 IT may be nice for combining all of the scheduler functionality into one class and just having kwargs for the different schedulers, but it may be better to just have a separate class for each scheduler type.
 TODO: Session Class should hold all helpful methods for starting and stopping the scheduler, as well as holding the data and processing it.
