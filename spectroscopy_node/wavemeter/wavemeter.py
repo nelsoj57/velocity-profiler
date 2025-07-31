@@ -202,31 +202,31 @@ class WavemeterWS7:
 
         return frequency
 
-    @staticmethod
-    # @wlmData.CALLBACK_TYPE
-    @_CALLBACK_TYPE  # TODO: see if this works
-    def frequency_callback_handler(event_type, time_stamp, frequency):
-        # TODO: change mode to be a more descriptive name, like event_mode or event_type
-        """
-        Callback function to handle frequency updates from the wavemeter.
-        This function is called by the wavemeter API when a frequency update event occurs.
+    # @staticmethod
+    # # @wlmData.CALLBACK_TYPE
+    # @_CALLBACK_TYPE  # TODO: see if this works
+    # def frequency_callback_handler(event_type, time_stamp, frequency):
+    #     # TODO: change mode to be a more descriptive name, like event_mode or event_type
+    #     """
+    #     Callback function to handle frequency updates from the wavemeter.
+    #     This function is called by the wavemeter API when a frequency update event occurs.
 
-        Args:
-            event_type: The type of the event (e.g., cmiFrequency1, cmiFrequency2).
-            time_stamp: An integer value associated with the event.
-            frequency: The frequency value in Hz.
-        """
-        match event_type:
-            case wlmConst.cmiFrequency1:
-                pass
-            # TODO: Send the data somewhere
-            # TODO: you could have a buffer/array/queue that belongs to the WavemeterWS7 object that holds the frequency data and then have a method to retrieve that data
+    #     Args:
+    #         event_type: The type of the event (e.g., cmiFrequency1, cmiFrequency2).
+    #         time_stamp: An integer value associated with the event.
+    #         frequency: The frequency value in Hz.
+    #     """
+    #     match event_type:
+    #         case wlmConst.cmiFrequency1:
+    #             pass
+    #         # TODO: Send the data somewhere
+    #         # TODO: you could have a buffer/array/queue that belongs to the WavemeterWS7 object that holds the frequency data and then have a method to retrieve that data
 
-            case wlmConst.cmiFrequency2:
-                pass
+    #         case wlmConst.cmiFrequency2:
+    #             pass
 
-            case _:
-                return  # Ignore other modes TODO: see if return is the right/fastest way to ignore
+    #         case _:
+    #             return  # Ignore other modes TODO: see if return is the right/fastest way to ignore
 
     # def start_streaming(self):
     #     """
@@ -316,7 +316,9 @@ class WavemeterWS7:
         Public method to unregister the frequency callback function.
         This method is used to remove the callback for frequency updates.
         """
-        if self._cb_cfunc is not None:
+        if (
+            self._cb_cfunc is not None
+        ):  # TODO: make sure this ^ wont ever happen if the callback is registered
             self._unregister_callback()
             self._cb_cfunc = None
 
@@ -399,6 +401,9 @@ OR they could instead be in charge of mediating conversation via TCP between the
 """
 
 
+# TODO: split base class into too children, one for event-driven callbacks and one for aquisition strategies
+# The ABC could have the "AquisitionStrategy" as just a callable and the event-driven ones could specifiy that it must be of a CB format and returns a SamplePoint or float value...
+# While the other ones could specify that it must be a callable that takes a WavemeterWS7 object and returns a SamplePoint or float value.
 class BaseScheduler(ABC):
     # TODO: Make the AcquisitionStrategy an optional attribute of the Scheduler and Session classes
 
@@ -496,7 +501,7 @@ class CbEventDrivenScheduler(BaseScheduler):  # TODO: come up with a better name
         self,
         wavemeter: WavemeterWS7,
         # acquisition_strategy: Optional[AcquisitionStrategy] = None,
-        threaded: bool = True,  # TODO possibly make default False?
+        threaded: bool = True,  # TODO: possibly make default False?
     ):
         super().__init__(wavemeter, None, threaded)
         # self._device.register_frequency_callback(self._frequency_callback_handler)
@@ -526,6 +531,7 @@ class CbEventDrivenScheduler(BaseScheduler):  # TODO: come up with a better name
         It will register the callback function and wait for frequency events.
         """
         # Register the callback function with the wavemeter API
+        # TODO: if Scheduler is updated to take CB_func as an argument, adjust the below logic
         self._device.register_frequency_callback(self._frequency_callback_handler)
 
         # while not self._stop_event.is_set():
