@@ -168,6 +168,10 @@ class TestCbEventDrivenScheduler:
         self.scheduler.start()
         assert self.scheduler.is_running
 
+    # TODO: do one long test that tests the entire flow of the scheduler
+
+
+# TODO: Test for callback function individually (requires a mock wavemeter)
 
 # 1. Test starting and stopping the scheduler
 # 2. Test to make sure no more SamplePoints are being added after stopping the scheduler

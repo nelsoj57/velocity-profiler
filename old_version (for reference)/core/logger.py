@@ -1,3 +1,6 @@
+# TODO: Probably Delete this file
+
+
 class RunLogger:
     """
     Logs structured experimental data to a CSV or JSON file.
