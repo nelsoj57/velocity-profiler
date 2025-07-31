@@ -180,7 +180,7 @@ class WavemeterWS7:
 
         # self_ref = weakref.ref(
         #     self
-        # )  # Keep a weak reference to self to avoid circular references
+        # )  # Keep a weak reference to self to avoid circular references #TODO: I think its also to prevent garbage collection?
         self._cb_cfunc = None  # Callback function for frequency updates
 
     def get_frequency(self) -> float:
@@ -379,6 +379,24 @@ class AcquisitionStrategy(Protocol):
     # Acquire data from the wavemeter and return a float value or a SamplePoint object.
     # TODO: see if I want to use a SamplePoint object or just a float value.
     def __call__(self, device: WavemeterWS7) -> float: ...
+
+
+# ALL Schedulers should be able be able to be started and stopped (stopping itself is optional) externally
+# AND be able to be used multiple times.
+# TODO: Scheduler might not be a great name because it doesn't actually decide when to be run.add()
+# A better name might be AcquisitionManager or AcquisitionController or something similar.
+# AND the overarching facade/controller class that holds one or multiple AcquisitionManager instances, is in charge of...
+# Starting and stopping them, and possibly processing the data from them
+# These could be called AcquisitionSchedulers or AcquisitionSupervisors
+"""Because the managers manage a single acquisition strategy and the schedulers/supervisors manage multiple acquisition managers.
+
+Supervisors may be unnecessary if they would have no similar properties to eachother and would just be created on a case by case basis.
+
+Functions they could have:
+- start_at_time(time: datetime) -> None: Start the acquisition at a specific time
+
+OR they could instead be in charge of mediating conversation via TCP between the two computers
+"""
 
 
 class BaseScheduler(ABC):
